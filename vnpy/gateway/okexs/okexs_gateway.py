@@ -551,6 +551,11 @@ class OkexsWebsocketApi(WebsocketClient):
         self.callbacks = {}
         self.ticks = {}
 
+    def init(self, *args, **kwargs):
+        kwargs['ping_interval'] = 20
+        super().init(*args, **kwargs)
+
+
     def connect(
         self,
         key: str,
@@ -568,9 +573,17 @@ class OkexsWebsocketApi(WebsocketClient):
 
         self.init(WEBSOCKET_HOST, proxy_host, proxy_port)
 
+    # def unpack_data(self, data):
+    #     """"""
+    #     return json.loads(zlib.decompress(data, -zlib.MAX_WBITS))
+
     def unpack_data(self, data):
         """"""
-        return json.loads(zlib.decompress(data, -zlib.MAX_WBITS))
+        deflated_data = zlib.decompress(data, -zlib.MAX_WBITS)
+        if deflated_data == b'pong':
+            return None
+
+        return json.loads(deflated_data)
 
     def subscribe(self, req: SubscribeRequest):
         """
@@ -608,6 +621,9 @@ class OkexsWebsocketApi(WebsocketClient):
 
     def on_packet(self, packet: dict):
         """"""
+        if not packet:
+            return
+
         if "event" in packet:
             event = packet["event"]
             if event == "subscribe":
@@ -737,13 +753,13 @@ class OkexsWebsocketApi(WebsocketClient):
         asks = d["asks"]
         for n, buf in enumerate(bids):
             price, volume, _, __ = buf
-            tick.__setattr__("bid_price_%s" % (n + 1), price)
-            tick.__setattr__("bid_volume_%s" % (n + 1), volume)
+            tick.__setattr__("bid_price_%s" % (n + 1), float(price))
+            tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
 
         for n, buf in enumerate(asks):
             price, volume, _, __ = buf
-            tick.__setattr__("ask_price_%s" % (n + 1), price)
-            tick.__setattr__("ask_volume_%s" % (n + 1), volume)
+            tick.__setattr__("ask_price_%s" % (n + 1), float(price))
+            tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
 
         tick.datetime = _parse_timestamp(d["timestamp"])
         self.gateway.on_tick(copy(tick))

@@ -42,6 +42,8 @@ from vnpy.trader.object import (
     HistoryRequest
 )
 from vnpy.trader.event import EVENT_TIMER
+from vnpy.trader.utility import round_to
+import logging
 
 
 REST_HOST = "https://api.hbdm.com"
@@ -95,7 +97,7 @@ CONTRACT_TYPE_MAP = {
 
 
 symbol_type_map = {}
-
+symbol_price_tick_map = {}
 
 class HbdmGateway(BaseGateway):
     """
@@ -375,16 +377,23 @@ class HbdmRestApi(RestClient):
         )
         order.time = datetime.now().strftime("%H:%M:%S")
 
+        # added price tick calc
+        pricetick = symbol_price_tick_map[req.symbol]
+        price = round_to(req.price, pricetick)
+
         data = {
             "contract_code": req.symbol,
             "client_order_id": int(local_orderid),
-            "price": req.price,
+            # "price": req.price,
+            "price": price,
             "volume": int(req.volume),
             "direction": DIRECTION_VT2HBDM.get(req.direction, ""),
             "offset": OFFSET_VT2HBDM.get(req.offset, ""),
             "order_price_type": ORDERTYPE_VT2HBDM.get(req.type, ""),
             "lever_rate": 20
         }
+
+        self.gateway.write_log(f'hbdm send_order. data:{data}, order: {order}')
 
         self.add_request(
             method="POST",
@@ -415,10 +424,15 @@ class HbdmRestApi(RestClient):
             order.time = datetime.now().strftime("%H:%M:%S")
             self.gateway.on_order(order)
 
+            pricetick = symbol_price_tick_map[req.symbol]
+            price = round_to(req.price, pricetick)
+            self.gateway.write_log(f'symbol: {req.symbol}, pricetick: {pricetick}, price: {price}')
+
             d = {
                 "contract_code": req.symbol,
                 "client_order_id": int(local_orderid),
-                "price": req.price,
+                # "price": req.price,
+                "price": price,
                 "volume": int(req.volume),
                 "direction": DIRECTION_VT2HBDM.get(req.direction, ""),
                 "offset": OFFSET_VT2HBDM.get(req.offset, ""),
@@ -572,6 +586,11 @@ class HbdmRestApi(RestClient):
             self.gateway.on_contract(contract)
 
             symbol_type_map[contract.symbol] = d["contract_type"]
+            # added price_tick info
+            symbol_price_tick_map[contract.symbol] = d["price_tick"]
+
+            # self.gateway.write_log(f'symbol {d["contract_code"]}')
+            # self.gateway.write_log(f'pricetick {d["price_tick"]}')
 
         self.gateway.write_log("合约信息查询成功")
 

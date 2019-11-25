@@ -18,6 +18,7 @@ from requests import ConnectionError
 
 from vnpy.api.rest import Request, RestClient
 from vnpy.api.websocket import WebsocketClient
+import websocket
 from vnpy.trader.constant import (
     Direction,
     Exchange,
@@ -42,7 +43,8 @@ from vnpy.trader.object import (
     HistoryRequest
 )
 REST_HOST = "https://www.okex.com"
-WEBSOCKET_HOST = "wss://real.okex.com:10442/ws/v3"
+# WEBSOCKET_HOST = "wss://real.okex.com:10442/ws/v3"
+WEBSOCKET_HOST = "wss://real.okex.com:8443/ws/v3"
 
 STATUS_OKEXF2VT = {
     "0": Status.NOTTRADED,
@@ -264,6 +266,7 @@ class OkexfRestApi(RestClient):
             data["match_price"] = "0"
 
         order = req.create_order_data(orderid, self.gateway_name)
+        self.gateway.write_log(f'okexf send_order. data:{data}, order: {order}')
 
         self.add_request(
             "POST",
@@ -387,12 +390,12 @@ class OkexfRestApi(RestClient):
             return
 
         for pos_data in data["holding"][0]:
-            if int(pos_data["long_qty"]) > 0:
+            if float(pos_data["long_qty"]) > 0:
                 pos = PositionData(
                     symbol=pos_data["instrument_id"].upper(),
                     exchange=Exchange.OKEX,
                     direction=Direction.LONG,
-                    volume=int(pos_data["long_qty"]),
+                    volume=float(pos_data["long_qty"]),
                     frozen=float(pos_data["long_qty"]) - float(pos_data["long_avail_qty"]),
                     price=float(pos_data["long_avg_cost"]),
                     pnl=float(pos_data["realised_pnl"]),
@@ -400,12 +403,12 @@ class OkexfRestApi(RestClient):
                 )
                 self.gateway.on_position(pos)
 
-            if int(pos_data["short_qty"]) > 0:
+            if float(pos_data["short_qty"]) > 0:
                 pos = PositionData(
                     symbol=pos_data["instrument_id"],
                     exchange=Exchange.OKEX,
                     direction=Direction.SHORT,
-                    volume=int(pos_data["short_qty"]),
+                    volume=float(pos_data["short_qty"]),
                     frozen=float(pos_data["short_qty"]) - float(pos_data["short_avail_qty"]),
                     price=float(pos_data["short_avg_cost"]),
                     pnl=float(pos_data["realised_pnl"]),
@@ -424,7 +427,7 @@ class OkexfRestApi(RestClient):
                 orderid=order_data["client_oid"],
                 direction=direction,
                 offset=offset,
-                traded=int(order_data["filled_qty"]),
+                traded=float(order_data["filled_qty"]),
                 price=float(order_data["price"]),
                 volume=float(order_data["size"]),
                 time=utc_to_local(order_data["timestamp"]).strftime("%H:%M:%S"),
@@ -612,6 +615,10 @@ class OkexfWebsocketApi(WebsocketClient):
         self.callbacks = {}
         self.ticks = {}
 
+    def init(self, *args, **kwargs):
+        kwargs['ping_interval'] = 20
+        super().init(*args, **kwargs)
+
     def connect(
         self,
         key: str,
@@ -631,7 +638,11 @@ class OkexfWebsocketApi(WebsocketClient):
 
     def unpack_data(self, data):
         """"""
-        return json.loads(zlib.decompress(data, -zlib.MAX_WBITS))
+        deflated_data = zlib.decompress(data, -zlib.MAX_WBITS)
+        if deflated_data == b'pong':
+            return None
+
+        return json.loads(deflated_data)
 
     def subscribe(self, req: SubscribeRequest):
         """
@@ -667,8 +678,15 @@ class OkexfWebsocketApi(WebsocketClient):
         """"""
         self.gateway.write_log("Websocket API连接断开")
 
+    def _ping(self):
+        """"""
+        self._send_text('ping')
+
     def on_packet(self, packet: dict):
         """"""
+        if not packet:
+            return
+
         if "event" in packet:
             event = packet["event"]
             if event == "subscribe":
@@ -740,7 +758,7 @@ class OkexfWebsocketApi(WebsocketClient):
         # Subscribe to account update
         channels = []
         for currency in currencies:
-            if currency != "USD":
+            if currency not in ["USD", "USDT"]:
                 channel = f"futures/account:{currency}"
                 channels.append(channel)
 
@@ -798,13 +816,13 @@ class OkexfWebsocketApi(WebsocketClient):
         asks = d["asks"]
         for n, buf in enumerate(bids):
             price, volume, _, __ = buf
-            tick.__setattr__("bid_price_%s" % (n + 1), price)
-            tick.__setattr__("bid_volume_%s" % (n + 1), volume)
+            tick.__setattr__("bid_price_%s" % (n + 1), float(price))
+            tick.__setattr__("bid_volume_%s" % (n + 1), float(volume))
 
         for n, buf in enumerate(asks):
             price, volume, _, __ = buf
-            tick.__setattr__("ask_price_%s" % (n + 1), price)
-            tick.__setattr__("ask_volume_%s" % (n + 1), volume)
+            tick.__setattr__("ask_price_%s" % (n + 1), float(price))
+            tick.__setattr__("ask_volume_%s" % (n + 1), float(volume))
 
         tick.datetime = utc_to_local(d["timestamp"])
         self.gateway.on_tick(copy(tick))
@@ -867,10 +885,10 @@ class OkexfWebsocketApi(WebsocketClient):
             symbol=d["instrument_id"],
             exchange=Exchange.OKEX,
             direction=Direction.LONG,
-            volume=d["long_qty"],
+            volume=float(d["long_qty"]),
             frozen=float(d["long_qty"]) - float(d["long_avail_qty"]),
-            price=d["long_avg_cost"],
-            pnl=d["realised_pnl"],
+            price=float(d["long_avg_cost"]),
+            pnl=float(d["realised_pnl"]),
             gateway_name=self.gateway_name,
         )
         self.gateway.on_position(pos)
@@ -879,10 +897,10 @@ class OkexfWebsocketApi(WebsocketClient):
             symbol=d["instrument_id"],
             exchange=Exchange.OKEX,
             direction=Direction.SHORT,
-            volume=d["short_qty"],
+            volume=float(d["short_qty"]),
             frozen=float(d["short_qty"]) - float(d["short_avail_qty"]),
-            price=d["short_avg_cost"],
-            pnl=d["realised_pnl"],
+            price=float(d["short_avg_cost"]),
+            pnl=float(d["realised_pnl"]),
             gateway_name=self.gateway_name,
         )
         self.gateway.on_position(pos)
@@ -901,6 +919,9 @@ def get_timestamp():
 
 
 def utc_to_local(timestamp):
-    time = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ")
+    try:
+        time = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        time = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
     utc_time = time + timedelta(hours=8)
     return utc_time
